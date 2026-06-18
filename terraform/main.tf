@@ -7,7 +7,7 @@ resource "aws_vpc" "ai_vpc" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "AI-VPC" }
+  tags                 = { Name = "AI-VPC" }
 }
 
 resource "aws_subnet" "public" {
@@ -16,7 +16,7 @@ resource "aws_subnet" "public" {
   cidr_block              = cidrsubnet(aws_vpc.ai_vpc.cidr_block, 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
-  tags = { Name = "Public-Subnet-${count.index}" }
+  tags                    = { Name = "Public-Subnet-${count.index}" }
 }
 
 resource "aws_subnet" "private" {
@@ -24,13 +24,13 @@ resource "aws_subnet" "private" {
   vpc_id            = aws_vpc.ai_vpc.id
   cidr_block        = cidrsubnet(aws_vpc.ai_vpc.cidr_block, 8, count.index + 10)
   availability_zone = data.aws_availability_zones.available.names[count.index]
-  tags = { Name = "Private-Subnet-${count.index}" }
+  tags              = { Name = "Private-Subnet-${count.index}" }
 }
 
 # 2. Gateways & Routing
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.ai_vpc.id
-  tags = { Name = "AI-IGW" }
+  tags   = { Name = "AI-IGW" }
 }
 
 resource "aws_eip" "nat_eip" {
@@ -40,7 +40,7 @@ resource "aws_eip" "nat_eip" {
 resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat_eip.id
   subnet_id     = aws_subnet.public[0].id
-  tags = { Name = "AI-NAT" }
+  tags          = { Name = "AI-NAT" }
   depends_on    = [aws_internet_gateway.igw]
 }
 
@@ -102,7 +102,7 @@ resource "aws_security_group" "bastion_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
   egress {
     from_port   = 0
@@ -149,36 +149,35 @@ resource "random_id" "id" {
   byte_length = 4
 }
 
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
 resource "aws_instance" "bastion" {
-  ami                         = data.aws_ami.ubuntu.id
+  ami                         = data.aws_ami.amazon_linux_2023.id
   instance_type               = "t3.micro"
   subnet_id                   = aws_subnet.public[0].id
   vpc_security_group_ids      = [aws_security_group.bastion_sg.id]
   key_name                    = aws_key_pair.lab_key.key_name
   associate_public_ip_address = true
-  tags = { Name = "AI-Bastion-Host" }
+  depends_on                  = [aws_instance.gpu_node]
+  tags                        = { Name = "AI-Bastion-Host" }
 }
 
-# 5. GPU Instance
-data "aws_ami" "deep_learning" {
+# 5. CPU Instance for LightGBM fallback
+data "aws_ami" "amazon_linux_2023" {
   most_recent = true
   owners      = ["amazon"]
+
   filter {
     name   = "name"
-    values = ["Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)*"]
+    values = ["al2023-ami-*-x86_64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
   }
 }
 
@@ -205,15 +204,15 @@ resource "aws_iam_instance_profile" "ai_profile" {
 }
 
 resource "aws_instance" "gpu_node" {
-  ami                    = data.aws_ami.deep_learning.id
-  instance_type          = "g4dn.xlarge" 
+  ami                    = data.aws_ami.amazon_linux_2023.id
+  instance_type          = "r5.xlarge"
   subnet_id              = aws_subnet.private[0].id
   vpc_security_group_ids = [aws_security_group.gpu_sg.id]
   key_name               = aws_key_pair.lab_key.key_name
   iam_instance_profile   = aws_iam_instance_profile.ai_profile.name
 
   root_block_device {
-    volume_size = 150 
+    volume_size = 150
     volume_type = "gp3"
   }
 
@@ -222,7 +221,7 @@ resource "aws_instance" "gpu_node" {
     model_id = var.model_id
   })
 
-  tags = { Name = "AI-Inference-Node" }
+  tags = { Name = "AI-CPU-LightGBM-Node" }
 }
 
 # 6. Load Balancer
